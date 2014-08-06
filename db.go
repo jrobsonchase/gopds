@@ -184,6 +184,7 @@ func (db *OpdsDB) GetFeed(name string) (*OpdsFeed, error) {
 				entry.Links[linkNo] = &OpdsLink{Type: entry.ThumbType, Href: "/get/thumbs/" + entry.Id, Rel: "http://opds-spec.org/image/thumbnail"}
 				linkNo++
 			}
+			entry.Id = "urn:uuid:" + entry.Id
 			feed.Entries[i] = entry
 			i++
 		}

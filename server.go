@@ -53,7 +53,8 @@ func (srv *Server) AddBook(book Ebook) error {
 		return err
 	}
 	if book.OpdsMeta().Thumb {
-		file, err := os.Create(filepath.FromSlash(srv.Files + "/thumbs/" + id))
+		thumbPath := filepath.FromSlash(srv.Files + "/thumbs/" + id)
+		file, err := os.Create(thumbPath)
 		if err != nil {
 			return err
 		}
@@ -66,7 +67,8 @@ func (srv *Server) AddBook(book Ebook) error {
 		}
 	}
 	if book.OpdsMeta().Cover {
-		file, err := os.Create(filepath.FromSlash(srv.Files + "/covers/" + id))
+		coverPath := filepath.FromSlash(srv.Files + "/covers/" + id)
+		file, err := os.Create(coverPath)
 		if err != nil {
 			return err
 		}
@@ -78,7 +80,8 @@ func (srv *Server) AddBook(book Ebook) error {
 			return err
 		}
 	}
-	file, err := os.Create(filepath.FromSlash(srv.Files + "/books/" + id))
+	bookPath := filepath.FromSlash(srv.Files + "/books/" + id)
+	file, err := os.Create(bookPath)
 	if err != nil {
 		return err
 	}

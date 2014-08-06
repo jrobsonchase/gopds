@@ -39,6 +39,6 @@ func main() {
 		}
 		fmt.Fprintf(w,"%s\n%s\n",xml.Header,string(out))
 	})
-	http.Handle("/get/",http.StripPrefix("/get/", http.FileServer(http.Dir("files"))))
+	http.Handle("/get/",http.StripPrefix("/get/", http.FileServer(http.Dir(*dataPath + "/files"))))
 	http.ListenAndServe(":8000",nil)
 }
