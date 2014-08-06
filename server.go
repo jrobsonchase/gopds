@@ -3,6 +3,7 @@ package gopds
 import (
 	"errors"
 	"github.com/howeyc/fsnotify"
+	"path/filepath"
 	"time"
 	"log"
 	"io"
@@ -17,8 +18,8 @@ type Server struct {
 }
 
 func NewServer(dataPath string) (*Server, error) {
-	dbpath := dataPath + "/db"
-	filepath := dataPath + "/files"
+	dbpath := filepath.FromSlash(dataPath + "/db")
+	filePath := filepath.FromSlash(dataPath + "/files")
 	db, err := OpenDB(dbpath)
 	if err != nil {
 		return nil, err
@@ -27,20 +28,20 @@ func NewServer(dataPath string) (*Server, error) {
 	if err != nil {
 		return nil, err
 	}
-	info, err := os.Stat(filepath)
+	info, err := os.Stat(filePath)
 	if err != nil {
 		for _, v := range []string{"books", "thumbs", "covers"} {
-			err := os.MkdirAll(filepath+"/"+v, os.ModeDir|0777)
+			err := os.MkdirAll(filepath.FromSlash(filePath+"/"+v), os.ModeDir|0777)
 			if err != nil {
 				return nil, err
 			}
 		}
 	} else {
 		if !info.IsDir() {
-			return nil, errors.New("Not a directory: " + filepath)
+			return nil, errors.New("Not a directory: " + filePath)
 		}
 	}
-	return &Server{db, filepath,&sync.Mutex{}}, nil
+	return &Server{db, filePath,&sync.Mutex{}}, nil
 }
 
 func (srv *Server) AddBook(book Ebook) error {
@@ -52,7 +53,7 @@ func (srv *Server) AddBook(book Ebook) error {
 		return err
 	}
 	if book.OpdsMeta().Thumb {
-		file, err := os.Create(srv.Files + "/thumbs/" + id)
+		file, err := os.Create(filepath.FromSlash(srv.Files + "/thumbs/" + id))
 		if err != nil {
 			return err
 		}
@@ -65,7 +66,7 @@ func (srv *Server) AddBook(book Ebook) error {
 		}
 	}
 	if book.OpdsMeta().Cover {
-		file, err := os.Create(srv.Files + "/covers/" + id)
+		file, err := os.Create(filepath.FromSlash(srv.Files + "/covers/" + id))
 		if err != nil {
 			return err
 		}
@@ -77,7 +78,7 @@ func (srv *Server) AddBook(book Ebook) error {
 			return err
 		}
 	}
-	file, err := os.Create(srv.Files + "/books/" + id)
+	file, err := os.Create(filepath.FromSlash(srv.Files + "/books/" + id))
 	if err != nil {
 		return err
 	}
@@ -91,23 +92,24 @@ func (srv *Server) AddBook(book Ebook) error {
 	return nil
 }
 
-func (srv *Server) AutoAdd(path string, open func(string) (Ebook,error)) error {
+func (srv *Server) AutoAdd(filePath string, open func(string) (Ebook,error)) error {
+	safePath := filepath.FromSlash(filePath)
 	watch,err := fsnotify.NewWatcher()
     if err != nil {
         return err
     }
-	pathInfo, err := os.Stat(path)
+	safePathInfo, err := os.Stat(safePath)
 	if err != nil {
-		err := os.MkdirAll(path, os.ModeDir|0777)
+		err := os.MkdirAll(safePath, os.ModeDir|0777)
 		if err != nil {
 			return  err
 		}
 	} else {
-		if !pathInfo.IsDir() {
+		if !safePathInfo.IsDir() {
 			return errors.New("Not a directory")
 		}
 	}
-    err = watch.Watch(path)
+    err = watch.Watch(safePath)
     if err != nil {
         return err
     }

@@ -2,6 +2,7 @@ package epub
 
 import (
 	"archive/zip"
+	"path/filepath"
 	"regexp"
 	"encoding/xml"
 	"github.com/Pursuit92/gopds"
@@ -29,8 +30,16 @@ func ReadEpub(path string) (gopds.Ebook, error) {
 }
 
 func readEpub(path string) (*Epub, error) {
-	book := &Epub{path: path, HasThumb: true, HasCover: true}
-	err := book.readOPF()
+	safePath := filepath.FromSlash(path)
+
+	book := &Epub{path: safePath, HasThumb: true, HasCover: true}
+	// Open a zip archive for reading.
+	var err error
+	book.file, err = zip.OpenReader(safePath)
+	if err != nil {
+		return nil,err
+	}
+	err = book.readOPF()
 	if err != nil {
 		return nil, err
 	}
@@ -46,7 +55,7 @@ func (book Epub) coverTest() (string,bool) {
 			if err == nil {
 				imgtype := ""
 				switch v.Name[len(v.Name)-4:] {
-				case ".jpg",".jpeg":
+				case ".jpg","jpeg":
 					imgtype = "image/jpeg"
 				case ".png":
 					imgtype = "image/png"
@@ -103,13 +112,6 @@ func (book Epub) Book() io.ReadCloser {
 }
 
 func (book *Epub) readOPF() error {
-	// Open a zip archive for reading.
-	var err error
-	book.file, err = zip.OpenReader(book.path)
-	if err != nil {
-		return err
-	}
-
 	// Iterate through the files in the archive,
 	for _, f := range book.file.File {
 		if f.Name[len(f.Name)-3:] == "opf" {
