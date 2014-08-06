@@ -16,7 +16,9 @@ type Server struct {
 	Mut *sync.Mutex
 }
 
-func NewServer(dbpath, filepath string) (*Server, error) {
+func NewServer(dataPath string) (*Server, error) {
+	dbpath := dataPath + "/db"
+	filepath := dataPath + "/files"
 	db, err := OpenDB(dbpath)
 	if err != nil {
 		return nil, err
@@ -94,6 +96,17 @@ func (srv *Server) AutoAdd(path string, open func(string) (Ebook,error)) error {
     if err != nil {
         return err
     }
+	pathInfo, err := os.Stat(path)
+	if err != nil {
+		err := os.MkdirAll(path, os.ModeDir|0777)
+		if err != nil {
+			return  err
+		}
+	} else {
+		if !pathInfo.IsDir() {
+			return errors.New("Not a directory")
+		}
+	}
     err = watch.Watch(path)
     if err != nil {
         return err
@@ -115,7 +128,6 @@ func (srv *Server) AutoAdd(path string, open func(string) (Ebook,error)) error {
                                 os.Remove(name)
                             } else {
                                 log.Printf("Error: %s",err.Error())
-                                os.Rename(name,"error/" + name)
                             }
                         }(fileName)
                     }

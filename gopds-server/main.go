@@ -3,6 +3,7 @@ package main
 import (
 	"fmt"
 	"sort"
+	"flag"
 	"net/http"
 	"encoding/xml"
 	"github.com/Pursuit92/gopds/epub"
@@ -11,12 +12,18 @@ import (
 
 
 func main() {
-	srv,err := gopds.NewServer("database","files")
+	autoadd := flag.String("autoadd","","Directory to watch for epubs")
+	dataPath := flag.String("data",".gopds","Data directory")
+	flag.Parse()
+
+	srv,err := gopds.NewServer(*dataPath)
 	if err != nil {
 		panic(err)
 	}
 
-	srv.AutoAdd("autoadd",epub.ReadEpub)
+	if *autoadd != "" {
+		srv.AutoAdd(*autoadd,epub.ReadEpub)
+	}
 
 
 	http.HandleFunc("/all",func(w http.ResponseWriter,r *http.Request) {

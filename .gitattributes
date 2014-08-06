@@ -1,0 +1,2 @@
+*.exe -crlf -diff
+gopds-server -crlf -diff
