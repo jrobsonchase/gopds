@@ -2,11 +2,14 @@ package gopds
 
 import (
 	"encoding/json"
+	"fmt"
+	"sort"
 	"errors"
 	"github.com/syndtr/goleveldb/leveldb"
 	"github.com/syndtr/goleveldb/leveldb/iterator"
 	"os"
 	"time"
+	"path/filepath"
 )
 
 type OpdsDB struct {
@@ -15,16 +18,17 @@ type OpdsDB struct {
 }
 
 func OpenDB(path string) (*OpdsDB, error) {
-	database := &OpdsDB{path: path}
+	safePath := filepath.FromSlash(path)
+	database := &OpdsDB{path: safePath}
 	database.dbs = make(map[string]*leveldb.DB)
-	pathInfo, err := os.Stat(path)
+	safePathInfo, err := os.Stat(safePath)
 	if err != nil {
-		err := os.MkdirAll(path, os.ModeDir|0777)
+		err := os.MkdirAll(safePath, os.ModeDir|0777)
 		if err != nil {
 			return nil, err
 		}
 	} else {
-		if !pathInfo.IsDir() {
+		if !safePathInfo.IsDir() {
 			return nil, errors.New("Not a directory")
 		}
 	}
@@ -34,7 +38,7 @@ func OpenDB(path string) (*OpdsDB, error) {
 func (db *OpdsDB) GetDB(database string) (*leveldb.DB, error) {
 	_, exists := db.dbs[database]
 	if !exists {
-		newdb, err := leveldb.OpenFile(db.path+"/"+database, nil)
+		newdb, err := leveldb.OpenFile(filepath.FromSlash(db.path+"/"+database), nil)
 		if err != nil {
 			return nil, err
 		}
@@ -139,20 +143,57 @@ func (db *OpdsDB) Init() error {
 	return nil
 }
 
-func (db *OpdsDB) GetFeed(name string) (*OpdsFeed, error) {
+func (db *OpdsDB) GetFeed(name string,perPage,pageNo int,sortString string) (*OpdsFeed, error) {
 	dbFeed := &OpdsFeedDB{}
 	err := db.Get("nav", name, dbFeed)
 	if err != nil {
 		return nil, err
 	}
+
 	feed := &OpdsFeed{OpdsCommon: dbFeed.OpdsCommon,
-		XmlNs: "http://www.w3.org/2005/Atom"}
-	if dbFeed.Type == Acq && dbFeed.All {
+	XmlNs: "http://www.w3.org/2005/Atom"}
+
+	sortFun := sortFuncBytes[dbFeed.Sort]
+	if sortString != "" {
+		sortFun = sortFuncStrings[sortString]
+	}
+
+	switch dbFeed.Type {
+	case Acq:
+		feed.Entries,err = db.getAcqEntries(dbFeed.Entries)
+	case Nav:
+		feed.Entries,err = db.getNavEntries(dbFeed.Entries)
+	default:
+		return nil,errors.New("Not yet implemented")
+	}
+
+	// add links to the feed
+	createFeedLinks(feed,name,perPage,pageNo,sortString)
+
+	// Sort and paginate
+	sorter := NewEntrySorter(feed.Entries,sortFun)
+	sort.Sort(sorter)
+	start := perPage * pageNo
+	end := start + perPage
+	if end > len(feed.Entries) || perPage == 0 {
+		end = len(feed.Entries)
+	}
+	if start > len(feed.Entries) {
+		start = len(feed.Entries)
+	}
+	feed.Entries = feed.Entries[start:end]
+
+	return feed, err
+}
+
+func (db *OpdsDB) getAcqEntries(ents []string) ([]*OpdsEntry,error) {
+	var entries []*OpdsEntry
+	if ents == nil {
 		n, err := db.Count("books")
 		if err != nil {
 			return nil, err
 		}
-		feed.Entries = make([]*OpdsEntry, n)
+		entries = make([]*OpdsEntry, n)
 		iter, err := db.NewIterator("books")
 		if err != nil {
 			return nil, err
@@ -164,28 +205,9 @@ func (db *OpdsDB) GetFeed(name string) (*OpdsFeed, error) {
 			if err != nil {
 				return nil, err
 			}
-			numLinks := 1
-			if entry.Cover {
-				numLinks++
-			}
-			if entry.Thumb {
-				numLinks++
-			}
-
-			entry.Links = make([]*OpdsLink, numLinks)
-			linkNo := 0
-			entry.Links[linkNo] = &OpdsLink{Type: "application/epub+zip", Href: "/get/books/" + entry.Id, Rel: "http://opds-spec.org/acquisition"}
-			linkNo++
-			if entry.Cover {
-				entry.Links[linkNo] = &OpdsLink{Type: entry.CoverType, Href: "/get/covers/" + entry.Id, Rel: "http://opds-spec.org/image"}
-				linkNo++
-			}
-			if entry.Thumb {
-				entry.Links[linkNo] = &OpdsLink{Type: entry.ThumbType, Href: "/get/thumbs/" + entry.Id, Rel: "http://opds-spec.org/image/thumbnail"}
-				linkNo++
-			}
+			createAcqLinks(entry)
 			entry.Id = "urn:uuid:" + entry.Id
-			feed.Entries[i] = entry
+			entries[i] = entry
 			i++
 		}
 		iter.Release()
@@ -193,9 +215,180 @@ func (db *OpdsDB) GetFeed(name string) (*OpdsFeed, error) {
 		if err != nil {
 			return nil, err
 		}
+	} else {
+		entries = make([]*OpdsEntry,len(ents))
+		n := 0
+		for i,v := range ents {
+			err := db.Get("books",v,entries[i])
+			if err == nil {
+				createAcqLinks(entries[i])
+				entries[i].Id = "urn:uuid:" + entries[i].Id
+				n++
+			}
+		}
+		if n != len(ents) {
+			realEntries := make([]*OpdsEntry,n)
+			j := 0
+			for _,v := range entries {
+				if v != nil {
+					realEntries[j] = v
+					j++
+				}
+			}
+			entries = realEntries
+		}
 	}
 
-	return feed, nil
+	return entries,nil
+}
+
+func feedToEntry(f *OpdsFeedDB) *OpdsEntry {
+	entry := &OpdsEntry{}
+	entry.Id = f.Id
+	entry.Title = f.Title
+	entry.Content = &OpdsContent{Content: f.Desc}
+	return entry
+}
+
+func (db *OpdsDB) getNavEntries(ents []string) ([]*OpdsEntry,error) {
+	var entries []*OpdsEntry
+	if ents == nil {
+		n, err := db.Count("nav")
+		if err != nil {
+			return nil, err
+		}
+		entries = make([]*OpdsEntry, n)
+		iter, err := db.NewIterator("nav")
+		if err != nil {
+			return nil, err
+		}
+		i := 0
+		for iter.Next() {
+			entry := &OpdsFeedDB{}
+			err := json.Unmarshal(iter.Value(), entry)
+			if err != nil {
+				return nil, err
+			}
+			entry.Id = "urn:uuid:" + entry.Id
+			entries[i] = feedToEntry(entry)
+			createNavLinks(entries[i])
+			i++
+		}
+		iter.Release()
+		err = iter.Error()
+		if err != nil {
+			return nil, err
+		}
+	} else {
+		dbEntries := make([]*OpdsFeedDB,len(ents))
+		n := 0
+		for i,v := range ents {
+			err := db.Get("nav",v,dbEntries[i])
+			if err == nil {
+				dbEntries[i].Id = "urn:uuid:" + dbEntries[i].Id
+				n++
+			}
+		}
+		if n != len(ents) {
+			realEntries := make([]*OpdsEntry,n)
+			j := 0
+			for _,v := range dbEntries {
+				if v != nil {
+					realEntries[j] = feedToEntry(v)
+					createNavLinks(realEntries[j])
+					j++
+				}
+			}
+			entries = realEntries
+		}
+	}
+
+	return entries,nil
+}
+
+func createNavLinks(feed *OpdsEntry) {
+}
+
+func createFeedLinks(feed *OpdsFeed,name string,perPage,pageNo int, sorter string) {
+	var countStr,pageStr,prevStr,nextStr,endStr,sortStr string
+	if perPage != 0 {
+		countStr = fmt.Sprintf(";count=%d",perPage)
+		pageStr = fmt.Sprintf(";page=%d",pageNo)
+		prevStr = fmt.Sprintf(";page=%d",pageNo-1)
+		nextStr = fmt.Sprintf(";page=%d",pageNo+1)
+		endStr = fmt.Sprintf(";page=%d",len(feed.Entries) / perPage)
+	}
+	if sorter != "" {
+		sortStr = "sort="+sorter
+	}
+	base := "/catalog/"+name+"?"+sortStr+countStr
+	numLinks := 3
+	navType := "application/atom+xml;profile=opds-catalog;kind=navigation"
+	start := base + ";page=0"
+	end := ""
+	if perPage != 0 {
+		end = base + endStr
+	} else {
+		end = start
+	}
+	self := base + pageStr
+	prev := ""
+	next := ""
+	if perPage != 0 {
+		if pageNo != 0 {
+			prev = base + prevStr
+			numLinks++
+		}
+		if pageNo * perPage < len(feed.Entries) {
+			next = base + nextStr
+			numLinks++
+		}
+
+	}
+	feed.Links = make([]*OpdsLink,numLinks)
+	linkNo := 3
+	feed.Links[0] = &OpdsLink{Type: navType,Href:self,Rel: "self"}
+	feed.Links[1] = &OpdsLink{Type: navType, Href:start, Rel: "start"}
+	feed.Links[2] = &OpdsLink{Type: navType, Href:end, Rel: "end"}
+	if prev != "" {
+		feed.Links[3] = &OpdsLink{Href:prev, Rel: "prev"}
+		linkNo++
+	}
+	if next != "" {
+		feed.Links[linkNo] = &OpdsLink{Href:next, Rel: "next"}
+		linkNo++
+	}
+
+
+}
+
+func createAcqLinks(entry *OpdsEntry) {
+	numLinks := 1
+	if entry.Cover {
+		numLinks++
+	}
+	if entry.Thumb {
+		numLinks++
+	}
+
+	entry.Links = make([]*OpdsLink, numLinks)
+	linkNo := 0
+	entry.Links[linkNo] = &OpdsLink{Type: "application/epub+zip",
+	Href: "/get/books/" + entry.Id,
+	Rel: "http://opds-spec.org/acquisition"}
+	linkNo++
+	if entry.Cover {
+		entry.Links[linkNo] = &OpdsLink{Type: entry.CoverType,
+		Href: "/get/covers/" + entry.Id,
+		Rel: "http://opds-spec.org/image"}
+		linkNo++
+	}
+	if entry.Thumb {
+		entry.Links[linkNo] = &OpdsLink{Type: entry.ThumbType,
+		Href: "/get/thumbs/" + entry.Id,
+		Rel: "http://opds-spec.org/image/thumbnail"}
+		linkNo++
+	}
 }
 
 func (db *OpdsDB) UpdateBook(uuid string, meta *OpdsMeta) error {

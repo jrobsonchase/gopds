@@ -2,8 +2,12 @@ package gopds
 
 import (
 	"errors"
+	"strconv"
 	"github.com/howeyc/fsnotify"
 	"path/filepath"
+	"encoding/xml"
+	"net/http"
+	"fmt"
 	"time"
 	"log"
 	"io"
@@ -143,8 +147,53 @@ func (srv *Server) AutoAdd(filePath string, open func(string) (Ebook,error)) err
 	return nil
 }
 
-func (srv *Server) GetFeed(name string) (*OpdsFeed, error) {
+func (srv *Server) GetFeed(name string,perPage,pageNo int,sortOverride string) (string, error) {
 	srv.Mut.Lock()
-	defer srv.Mut.Unlock()
-	return srv.DB.GetFeed(name)
+	feed,err := srv.DB.GetFeed(name,perPage,pageNo,sortOverride)
+	srv.Mut.Unlock()
+	if err != nil {
+		return "",err
+	}
+	out,err := xml.MarshalIndent(feed,"","  ")
+	return string(out),err
+}
+
+func (srv *Server) handleFeed(feed string) func(w http.ResponseWriter,r *http.Request) {
+	return func(w http.ResponseWriter,r *http.Request) {
+		var perPage,pageNo int
+		var err error
+		count := r.FormValue("count")
+		if count != "" {
+			perPage,err = strconv.Atoi(count)
+			if err != nil {
+				http.Error(w,err.Error(),400)
+				return
+			}
+		}
+		page := r.FormValue("page")
+		if page != "" {
+			pageNo,err = strconv.Atoi(page)
+			if err != nil {
+				http.Error(w,err.Error(),400)
+				return
+			}
+		}
+		sortMeth := r.FormValue("sort")
+		feed,err := srv.GetFeed(feed,perPage,pageNo,sortMeth)
+		if err != nil {
+			http.Error(w,err.Error(),500)
+			return
+		}
+        fmt.Fprintf(w,"%s\n%s\n",xml.Header,feed)
+	}
+}
+
+func (srv *Server) ServeHTTP() error {
+    http.HandleFunc("/",func(w http.ResponseWriter,r *http.Request) {
+        http.Redirect(w,r,"/catalog",301)
+    })
+
+    http.HandleFunc("/catalog",srv.handleFeed("all"))
+    http.Handle("/get/",http.StripPrefix("/get/", http.FileServer(http.Dir(srv.Files))))
+    return http.ListenAndServe(":8080",nil)
 }

@@ -29,19 +29,36 @@ func (s *EntrySorter) Len() int {
 	return len(s.entries)
 }
 
-func SortAuthor(i,j *OpdsEntry) bool {
+const (
+	SortTitle byte = iota
+	SortAuthor
+	SortUpdated
+)
+
+var (
+	sortFuncBytes map[byte]EntryComp = map[byte]EntryComp{
+		SortTitle: SortTitleFunc,
+		SortAuthor: SortAuthorFunc,
+		SortUpdated: SortUpdatedFunc}
+	sortFuncStrings map[string]EntryComp = map[string]EntryComp{
+		"title": SortTitleFunc,
+		"author": SortAuthorFunc,
+		"updated": SortUpdatedFunc}
+)
+
+func SortAuthorFunc(i,j *OpdsEntry) bool {
 	iName := i.Author.Name
 	jName := j.Author.Name
 	return iName < jName
 }
 
-func SortTitle(i,j *OpdsEntry) bool {
+func SortTitleFunc(i,j *OpdsEntry) bool {
 	iName := i.Title
 	jName := j.Title
 	return iName < jName
 }
 
-func SortUpdated(i,j *OpdsEntry) bool {
+func SortUpdatedFunc(i,j *OpdsEntry) bool {
 	iTime,_ := time.Parse(i.Updated,time.RFC3339)
 	jTime,_ := time.Parse(j.Updated,time.RFC3339)
 	return jTime.After(iTime)

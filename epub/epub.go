@@ -11,8 +11,6 @@ import (
 )
 
 var (
-	coverIds []string = []string{"fcvi", "coverimagestandard"}
-	thumbIds []string = []string{"fcvt", "thumbimagestandard"}
 	coverExp *regexp.Regexp = regexp.MustCompile(`.*([c,C]over|cvi).*\.(jpg|jpeg|png)`)
 	thumbExp *regexp.Regexp = regexp.MustCompile(`.*cvt.*\.(jpg|jpeg|png)`)
 )
