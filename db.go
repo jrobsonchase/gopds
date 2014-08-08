@@ -169,6 +169,7 @@ func (db *OpdsDB) GetFeed(name string,perPage,pageNo int,sortString string) (*Op
 
 	// add links to the feed
 	createFeedLinks(feed,name,perPage,pageNo,sortString)
+	addSearchLink(feed)
 
 	// Sort and paginate
 	sorter := NewEntrySorter(feed.Entries,sortFun)
@@ -309,6 +310,18 @@ func (db *OpdsDB) getNavEntries(ents []string) ([]*OpdsEntry,error) {
 func createNavLinks(feed *OpdsEntry) {
 }
 
+func addSearchLink(feed *OpdsFeed) {
+	// <link  rel="search" title="Search Catalog" type="application/atom+xml" href="http://manybooks.net/opds/search.php?q={searchTerms}"/>
+	searchLink := &OpdsLink{Rel: "search",
+		Href: "/catalog/search?q={searchTerms}",
+		Type: "application/atom+xml"}
+	if feed.Links != nil {
+		feed.Links = append(feed.Links,searchLink)
+	} else {
+		feed.Links = []*OpdsLink{searchLink}
+	}
+}
+
 func createFeedLinks(feed *OpdsFeed,name string,perPage,pageNo int, sorter string) {
 	var countStr,pageStr,prevStr,nextStr,endStr,sortStr string
 	if perPage != 0 {
@@ -345,20 +358,25 @@ func createFeedLinks(feed *OpdsFeed,name string,perPage,pageNo int, sorter strin
 		}
 
 	}
-	feed.Links = make([]*OpdsLink,numLinks)
+	newLinks := make([]*OpdsLink,numLinks)
 	linkNo := 3
-	feed.Links[0] = &OpdsLink{Type: navType,Href:self,Rel: "self"}
-	feed.Links[1] = &OpdsLink{Type: navType, Href:start, Rel: "start"}
-	feed.Links[2] = &OpdsLink{Type: navType, Href:end, Rel: "end"}
+	newLinks[0] = &OpdsLink{Type: navType,Href:self,Rel: "self"}
+	newLinks[1] = &OpdsLink{Type: navType, Href:start, Rel: "start"}
+	newLinks[2] = &OpdsLink{Type: navType, Href:end, Rel: "end"}
 	if prev != "" {
-		feed.Links[3] = &OpdsLink{Href:prev, Rel: "prev"}
+		newLinks[3] = &OpdsLink{Href:prev, Rel: "prev"}
 		linkNo++
 	}
 	if next != "" {
-		feed.Links[linkNo] = &OpdsLink{Href:next, Rel: "next"}
+		newLinks[linkNo] = &OpdsLink{Href:next, Rel: "next"}
 		linkNo++
 	}
 
+	if feed.Links != nil {
+		feed.Links = append(feed.Links,newLinks...)
+	} else {
+		feed.Links = newLinks
+	}
 
 }
 
