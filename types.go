@@ -7,6 +7,7 @@ import (
 const (
 	Nav byte = iota
 	Acq
+	Search
 )
 
 type OpdsFeed struct {
@@ -20,7 +21,6 @@ type OpdsFeedDB struct {
 	*OpdsCommon
 	Desc    string
 	User    string `json:",omitempty"`
-	Type    byte
 	Sort    byte
 	Entries []string `json:",omitempty"`
 }
@@ -28,6 +28,8 @@ type OpdsFeedDB struct {
 type OpdsCommon struct {
 	Id      string      `xml:"id,omitempty"`
 	Title   string      `xml:"title,omitempty"`
+	Name	string      `xml:"-"`
+	Type    byte        `xml:"-"`
 	Links   []*OpdsLink `xml:"link,omitempty" json:",omitempty"`
 	Updated string      `xml:"updated,omitempty"`
 	Author  *OpdsAuthor `xml:"author,omitempty" json:",omitempty"`
@@ -57,6 +59,7 @@ type OpdsEntry struct {
 	Category string       `xml:"category,omitempty" json:",omitempty"`
 	Content  *OpdsContent `xml:"content,omitempty" json:",omitempty"`
 	Links    []*OpdsLink  `xml:"link,omitempty" json:",omitempty"`
+	Order	int	`xml:"-"`
 }
 
 type OpdsMeta struct {

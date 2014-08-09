@@ -2,7 +2,7 @@ package gopds
 
 import (
 	"encoding/json"
-	"fmt"
+	"log"
 	"sort"
 	"errors"
 	"github.com/syndtr/goleveldb/leveldb"
@@ -79,6 +79,27 @@ func (db *OpdsDB) Get(database, key string, dest interface{}) error {
 	return nil
 }
 
+func (db *OpdsDB) GetAll(database string) ([][]byte,error) {
+	num,err := db.Count(database)
+	if err != nil {
+		return nil,err
+	}
+	iter,err := db.NewIterator(database)
+	if err != nil {
+		return nil,err
+	}
+	out := make([][]byte, num)
+	i := 0
+	for iter.Next() {
+		out[i] = make([]byte,len(iter.Value()))
+		copy(out[i],iter.Value())
+		i++
+	}
+	iter.Release()
+	return out,iter.Error()
+}
+
+
 func (db *OpdsDB) Exists(database, key string) (bool, error) {
 	d, err := db.GetDB(database)
 	if err != nil {
@@ -143,18 +164,54 @@ func (db *OpdsDB) Init() error {
 	return nil
 }
 
-func (db *OpdsDB) GetFeed(name string,perPage,pageNo int,sortString string) (*OpdsFeed, error) {
-	dbFeed := &OpdsFeedDB{}
-	err := db.Get("nav", name, dbFeed)
+func (db *OpdsDB) GetBookFeed(id string) (*OpdsFeed, error) {
+	entries,err := db.getAcqEntries([]string{id})
 	if err != nil {
-		return nil, err
+		return nil,err
+	}
+	if len(entries) != 0 {
+		feed := &OpdsFeed{OpdsCommon: &OpdsCommon{
+			Title: entries[0].Title,
+			Id: "urn:uuid:" + Uuidgen(),
+			Type: Acq},
+			XmlNs: "http://www.w3.org/2005/Atom"}
+		feed.Entries = entries
+
+		createFeedLinks(feed,"book:"+id)
+		addSearchLink(feed)
+		return feed,nil
+	}
+	log.Print("No book found by id: "+id)
+	return nil,nil
+}
+
+func (db *OpdsDB) GetFeed(name string,sortString string) (*OpdsFeed, error) {
+	var err error
+	dbFeed := &OpdsFeedDB{}
+	if len(name) >= 7 && name[:7] == "search:" {
+		dbFeed = &OpdsFeedDB{OpdsCommon: &OpdsCommon{
+			Id: "urn:uuid:" + Uuidgen(),
+			Type: Search,
+			Title: "Search Results"},
+			Desc: "Search: " + name[7:],
+			Sort: SortOrder}
+	} else {
+		err = db.Get("nav", name, dbFeed)
+		if err != nil {
+			dbFeed = &OpdsFeedDB{OpdsCommon: &OpdsCommon{
+				Id: "urn:uuid:" + Uuidgen(),
+				Type: Search,
+				Title: "Feed not found, searching: " + name},
+				Desc: "Search: " + name,
+				Sort: SortOrder}
+		}
 	}
 
 	feed := &OpdsFeed{OpdsCommon: dbFeed.OpdsCommon,
 	XmlNs: "http://www.w3.org/2005/Atom"}
 
 	sortFun := sortFuncBytes[dbFeed.Sort]
-	if sortString != "" {
+	if sortString != "" && dbFeed.Type != Search {
 		sortFun = sortFuncStrings[sortString]
 	}
 
@@ -164,25 +221,16 @@ func (db *OpdsDB) GetFeed(name string,perPage,pageNo int,sortString string) (*Op
 	case Nav:
 		feed.Entries,err = db.getNavEntries(dbFeed.Entries)
 	default:
-		return nil,errors.New("Not yet implemented")
+		feed.Entries,err = db.Search(name[7:])
 	}
 
 	// add links to the feed
-	createFeedLinks(feed,name,perPage,pageNo,sortString)
+	createFeedLinks(feed,name)
 	addSearchLink(feed)
 
 	// Sort and paginate
 	sorter := NewEntrySorter(feed.Entries,sortFun)
 	sort.Sort(sorter)
-	start := perPage * pageNo
-	end := start + perPage
-	if end > len(feed.Entries) || perPage == 0 {
-		end = len(feed.Entries)
-	}
-	if start > len(feed.Entries) {
-		start = len(feed.Entries)
-	}
-	feed.Entries = feed.Entries[start:end]
 
 	return feed, err
 }
@@ -190,41 +238,28 @@ func (db *OpdsDB) GetFeed(name string,perPage,pageNo int,sortString string) (*Op
 func (db *OpdsDB) getAcqEntries(ents []string) ([]*OpdsEntry,error) {
 	var entries []*OpdsEntry
 	if ents == nil {
-		n, err := db.Count("books")
+		entriesBytes,err := db.GetAll("books")
 		if err != nil {
-			return nil, err
+			return nil,err
 		}
-		entries = make([]*OpdsEntry, n)
-		iter, err := db.NewIterator("books")
-		if err != nil {
-			return nil, err
-		}
-		i := 0
-		for iter.Next() {
-			entry := &OpdsEntry{}
-			err := json.Unmarshal(iter.Value(), entry)
+		entries = make([]*OpdsEntry,len(entriesBytes))
+		for i,_ := range entries {
+			entries[i] = &OpdsEntry{}
+			err := json.Unmarshal(entriesBytes[i],entries[i])
 			if err != nil {
-				return nil, err
+				return nil,err
 			}
-			createAcqLinks(entry)
-			entry.Id = "urn:uuid:" + entry.Id
-			entries[i] = entry
-			i++
-		}
-		iter.Release()
-		err = iter.Error()
-		if err != nil {
-			return nil, err
 		}
 	} else {
 		entries = make([]*OpdsEntry,len(ents))
 		n := 0
 		for i,v := range ents {
+			entries[i] = &OpdsEntry{}
 			err := db.Get("books",v,entries[i])
 			if err == nil {
-				createAcqLinks(entries[i])
-				entries[i].Id = "urn:uuid:" + entries[i].Id
 				n++
+			} else {
+				log.Print("Error: "+err.Error())
 			}
 		}
 		if n != len(ents) {
@@ -240,80 +275,89 @@ func (db *OpdsDB) getAcqEntries(ents []string) ([]*OpdsEntry,error) {
 		}
 	}
 
+	for _,v := range entries {
+		createAcqLinks(v)
+		v.Id = "urn:uuid:" + v.Id
+	}
+
 	return entries,nil
 }
 
 func feedToEntry(f *OpdsFeedDB) *OpdsEntry {
-	entry := &OpdsEntry{}
+	entry := &OpdsEntry{OpdsMeta: &OpdsMeta{}}
 	entry.Id = f.Id
+	entry.Updated = f.Updated
+	entry.Author = f.Author
 	entry.Title = f.Title
+	entry.Category = f.Name
 	entry.Content = &OpdsContent{Content: f.Desc}
 	return entry
 }
 
 func (db *OpdsDB) getNavEntries(ents []string) ([]*OpdsEntry,error) {
 	var entries []*OpdsEntry
+	var feeds []*OpdsFeedDB
 	if ents == nil {
-		n, err := db.Count("nav")
+		feedsBytes,err := db.GetAll("nav")
 		if err != nil {
-			return nil, err
+			return nil,err
 		}
-		entries = make([]*OpdsEntry, n)
-		iter, err := db.NewIterator("nav")
-		if err != nil {
-			return nil, err
-		}
-		i := 0
-		for iter.Next() {
-			entry := &OpdsFeedDB{}
-			err := json.Unmarshal(iter.Value(), entry)
+		feeds = make([]*OpdsFeedDB,len(feedsBytes))
+		for i,_ := range feeds {
+			feeds[i] = &OpdsFeedDB{}
+			err := json.Unmarshal(feedsBytes[i],feeds[i])
 			if err != nil {
-				return nil, err
+				return nil,err
 			}
-			entry.Id = "urn:uuid:" + entry.Id
-			entries[i] = feedToEntry(entry)
-			createNavLinks(entries[i])
-			i++
-		}
-		iter.Release()
-		err = iter.Error()
-		if err != nil {
-			return nil, err
 		}
 	} else {
-		dbEntries := make([]*OpdsFeedDB,len(ents))
+		feeds = make([]*OpdsFeedDB,len(ents))
 		n := 0
 		for i,v := range ents {
-			err := db.Get("nav",v,dbEntries[i])
+			feeds[i] = &OpdsFeedDB{}
+			err := db.Get("nav",v,feeds[i])
 			if err == nil {
-				dbEntries[i].Id = "urn:uuid:" + dbEntries[i].Id
 				n++
+			} else {
 			}
 		}
 		if n != len(ents) {
-			realEntries := make([]*OpdsEntry,n)
+			realFeeds := make([]*OpdsFeedDB,n)
 			j := 0
-			for _,v := range dbEntries {
+			for _,v := range feeds {
 				if v != nil {
-					realEntries[j] = feedToEntry(v)
-					createNavLinks(realEntries[j])
+					realFeeds[j] = v
 					j++
 				}
 			}
-			entries = realEntries
+			feeds = realFeeds
 		}
+	}
+
+	entries = make([]*OpdsEntry,len(feeds))
+	for i,v := range feeds {
+		entries[i] = feedToEntry(v)
+		createNavLinks(entries[i])
+		entries[i].Id = "urn:uuid:" + entries[i].Id
 	}
 
 	return entries,nil
 }
 
 func createNavLinks(feed *OpdsEntry) {
+	// <link type="application/atom+xml" href="http://manybooks.net/opds/new_titles.php"/>
+	link := &OpdsLink{Href: "/catalog/" + feed.Category,
+		Type: "application/atom+xml"}
+	if feed.Links == nil {
+		feed.Links = []*OpdsLink{link}
+	} else {
+		feed.Links = append(feed.Links,link)
+	}
 }
 
 func addSearchLink(feed *OpdsFeed) {
-	// <link  rel="search" title="Search Catalog" type="application/atom+xml" href="http://manybooks.net/opds/search.php?q={searchTerms}"/>
 	searchLink := &OpdsLink{Rel: "search",
-		Href: "/catalog/search?q={searchTerms}",
+		Href: "/search?q={searchTerms}",
 		Type: "application/atom+xml"}
 	if feed.Links != nil {
 		feed.Links = append(feed.Links,searchLink)
@@ -322,55 +366,26 @@ func addSearchLink(feed *OpdsFeed) {
 	}
 }
 
-func createFeedLinks(feed *OpdsFeed,name string,perPage,pageNo int, sorter string) {
-	var countStr,pageStr,prevStr,nextStr,endStr,sortStr string
-	if perPage != 0 {
-		countStr = fmt.Sprintf(";count=%d",perPage)
-		pageStr = fmt.Sprintf(";page=%d",pageNo)
-		prevStr = fmt.Sprintf(";page=%d",pageNo-1)
-		nextStr = fmt.Sprintf(";page=%d",pageNo+1)
-		endStr = fmt.Sprintf(";page=%d",len(feed.Entries) / perPage)
+func createFeedLinks(feed *OpdsFeed,name string) {
+	var feedType string
+	switch feed.Type {
+	case Nav:
+		feedType = "application/atom+xml;profile=opds-catalog;kind=navigation"
+	case Acq:
+		feedType = "application/atom+xml;profile=opds-catalog;kind=acquisition"
+	default:
+		feedType = "application/atom+xml"
 	}
-	if sorter != "" {
-		sortStr = "sort="+sorter
-	}
-	base := "/catalog/"+name+"?"+sortStr+countStr
-	numLinks := 3
-	navType := "application/atom+xml;profile=opds-catalog;kind=navigation"
-	start := base + ";page=0"
-	end := ""
-	if perPage != 0 {
-		end = base + endStr
+	var base string
+	if len(name) >= 7 && name[:7] == "search:" {
+		base = "/search?q="+name[7:]
+	} else if len(name) >= 5 && name[:5] == "book:" {
+		base = "/book?id="+name[5:]
 	} else {
-		end = start
+		base = "/catalog/"+name
 	}
-	self := base + pageStr
-	prev := ""
-	next := ""
-	if perPage != 0 {
-		if pageNo != 0 {
-			prev = base + prevStr
-			numLinks++
-		}
-		if pageNo * perPage < len(feed.Entries) {
-			next = base + nextStr
-			numLinks++
-		}
-
-	}
-	newLinks := make([]*OpdsLink,numLinks)
-	linkNo := 3
-	newLinks[0] = &OpdsLink{Type: navType,Href:self,Rel: "self"}
-	newLinks[1] = &OpdsLink{Type: navType, Href:start, Rel: "start"}
-	newLinks[2] = &OpdsLink{Type: navType, Href:end, Rel: "end"}
-	if prev != "" {
-		newLinks[3] = &OpdsLink{Href:prev, Rel: "prev"}
-		linkNo++
-	}
-	if next != "" {
-		newLinks[linkNo] = &OpdsLink{Href:next, Rel: "next"}
-		linkNo++
-	}
+	selfLink := &OpdsLink{Type: feedType,Href:base,Rel: "self"}
+	newLinks := []*OpdsLink{selfLink}
 
 	if feed.Links != nil {
 		feed.Links = append(feed.Links,newLinks...)

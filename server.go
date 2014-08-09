@@ -1,8 +1,9 @@
 package gopds
 
 import (
+	"strings"
+	"runtime/debug"
 	"errors"
-	"strconv"
 	"github.com/howeyc/fsnotify"
 	"path/filepath"
 	"encoding/xml"
@@ -147,9 +148,9 @@ func (srv *Server) AutoAdd(filePath string, open func(string) (Ebook,error)) err
 	return nil
 }
 
-func (srv *Server) GetFeed(name string,perPage,pageNo int,sortOverride string) (string, error) {
+func (srv *Server) GetFeed(name string,sortOverride string) (string, error) {
 	srv.Mut.Lock()
-	feed,err := srv.DB.GetFeed(name,perPage,pageNo,sortOverride)
+	feed,err := srv.DB.GetFeed(name,sortOverride)
 	srv.Mut.Unlock()
 	if err != nil {
 		return "",err
@@ -158,28 +159,22 @@ func (srv *Server) GetFeed(name string,perPage,pageNo int,sortOverride string) (
 	return string(out),err
 }
 
-func (srv *Server) handleFeed(feed string) func(w http.ResponseWriter,r *http.Request) {
+func (srv *Server) GetBookFeed(id string) (string,error) {
+	srv.Mut.Lock()
+	feed,err := srv.DB.GetBookFeed(id)
+	srv.Mut.Unlock()
+	if err != nil {
+		return "",err
+	}
+	out,err := xml.MarshalIndent(feed,"","  ")
+	return string(out),err
+}
+
+
+func (srv *Server) serveFeed(feed,sortMeth string) func(w http.ResponseWriter,r *http.Request) {
 	return func(w http.ResponseWriter,r *http.Request) {
-		var perPage,pageNo int
 		var err error
-		count := r.FormValue("count")
-		if count != "" {
-			perPage,err = strconv.Atoi(count)
-			if err != nil {
-				http.Error(w,err.Error(),400)
-				return
-			}
-		}
-		page := r.FormValue("page")
-		if page != "" {
-			pageNo,err = strconv.Atoi(page)
-			if err != nil {
-				http.Error(w,err.Error(),400)
-				return
-			}
-		}
-		sortMeth := r.FormValue("sort")
-		feed,err := srv.GetFeed(feed,perPage,pageNo,sortMeth)
+		feed,err := srv.GetFeed(feed,sortMeth)
 		if err != nil {
 			http.Error(w,err.Error(),500)
 			return
@@ -188,12 +183,66 @@ func (srv *Server) handleFeed(feed string) func(w http.ResponseWriter,r *http.Re
 	}
 }
 
+func (srv *Server) handleCatalog(w http.ResponseWriter,r *http.Request) {
+	defer func() {
+		if r := recover(); r != nil {
+			fmt.Fprintf(w,"%s\n%s",r,debug.Stack())
+		}
+	}()
+	path := r.URL.Path
+	components := strings.Split(path,"/")
+	log.Printf("Path: %s",path)
+	log.Printf("Components: %d %v",len(components),components)
+	var feed,sortMeth string
+	if  components[1] != "" {
+		feed = components[1]
+	} else {
+		feed = "root"
+	}
+	if len(components) > 3 && components[2] == "sort" {
+		sortMeth = components[3]
+		log.Print("Sorting by",sortMeth)
+	}
+	srv.serveFeed(feed,sortMeth)(w,r)
+}
+
+func (srv *Server) handleSearch(w http.ResponseWriter,r *http.Request) {
+	searchTerms := r.FormValue("q")
+	log.Print("Searching: " + searchTerms)
+	srv.serveFeed("search:"+searchTerms,"")(w,r)
+}
+
+func (srv *Server) handleBook(w http.ResponseWriter,r *http.Request) {
+	id := r.FormValue("id")
+	log.Print("Serving book: "+id)
+	if id == "" {
+		srv.serveFeed("all","")(w,r)
+	} else {
+		srv.serveBook(id)(w,r)
+	}
+}
+
+func (srv *Server) serveBook(id string) func(http.ResponseWriter,*http.Request) {
+	return func(w http.ResponseWriter,r *http.Request) {
+		var err error
+		feed,err := srv.GetBookFeed(id)
+		if err != nil {
+			http.Error(w,err.Error(),500)
+			return
+		}
+        fmt.Fprintf(w,"%s\n%s\n",xml.Header,feed)
+	}
+
+}
+
 func (srv *Server) ServeHTTP() error {
     http.HandleFunc("/",func(w http.ResponseWriter,r *http.Request) {
         http.Redirect(w,r,"/catalog",301)
     })
 
-    http.HandleFunc("/catalog",srv.handleFeed("all"))
+	http.HandleFunc("/search",srv.handleSearch)
+	http.HandleFunc("/book",srv.handleBook)
+    http.Handle("/catalog/",http.StripPrefix("/catalog",http.HandlerFunc(srv.handleCatalog)))
     http.Handle("/get/",http.StripPrefix("/get/", http.FileServer(http.Dir(srv.Files))))
     return http.ListenAndServe(":8080",nil)
 }
