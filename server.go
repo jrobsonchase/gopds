@@ -2,6 +2,7 @@ package gopds
 
 import (
 	"strings"
+	//"encoding/json"
 	"runtime/debug"
 	"errors"
 	"github.com/howeyc/fsnotify"
@@ -14,28 +15,27 @@ import (
 	"io"
 	"os"
 	"sync"
+	opdsdb "github.com/Pursuit92/gopds/db"
 )
 
 type Server struct {
-	DB    *OpdsDB
+	DB    *opdsdb.OpdsDB
 	Files string
+	AutoAddPath string
+	addPatterns []AddPattern
 	Mut *sync.Mutex
 }
 
-func NewServer(dataPath string) (*Server, error) {
+func NewServer(dataPath,addPath string) (*Server, error) {
 	dbpath := filepath.FromSlash(dataPath + "/db")
 	filePath := filepath.FromSlash(dataPath + "/files")
-	db, err := OpenDB(dbpath)
-	if err != nil {
-		return nil, err
-	}
-	err = db.Init()
+	db, err := opdsdb.OpenDB(dbpath)
 	if err != nil {
 		return nil, err
 	}
 	info, err := os.Stat(filePath)
 	if err != nil {
-		for _, v := range []string{"books", "thumbs", "covers"} {
+		for _, v := range []string{"books", "thumbs", "covers", "tmp"} {
 			err := os.MkdirAll(filepath.FromSlash(filePath+"/"+v), os.ModeDir|0777)
 			if err != nil {
 				return nil, err
@@ -46,14 +46,23 @@ func NewServer(dataPath string) (*Server, error) {
 			return nil, errors.New("Not a directory: " + filePath)
 		}
 	}
-	return &Server{db, filePath,&sync.Mutex{}}, nil
+	srv := &Server{db, filePath,addPath,[]AddPattern{},&sync.Mutex{}}
+	err = srv.initDB()
+	if err != nil {
+		return nil, err
+	}
+	err = srv.runAutoAdds()
+	if err != nil {
+		return nil, err
+	}
+	return srv, nil
 }
 
 func (srv *Server) AddBook(book Ebook) error {
 	srv.Mut.Lock()
 	defer srv.Mut.Unlock()
 	defer book.Close()
-	id, err := srv.DB.AddBook(book.OpdsMeta())
+	id, err := srv.addBookDB(book.OpdsMeta())
 	if err != nil {
 		return err
 	}
@@ -100,7 +109,36 @@ func (srv *Server) AddBook(book Ebook) error {
 	return nil
 }
 
-func (srv *Server) AutoAdd(filePath string, open func(string) (Ebook,error)) error {
+func (srv *Server) DelBook(id string) error {
+	book := &OpdsEntry{}
+	err := srv.DB.Get("books",id,book)
+	if err != nil {
+		return err
+	}
+	if book.Cover {
+		os.Remove(filepath.FromSlash(srv.Files + "/covers/" + id))
+	}
+	if book.Thumb {
+		os.Remove(filepath.FromSlash(srv.Files + "/thumbs/" + id))
+	}
+	os.Remove(filepath.FromSlash(srv.Files + "/books/" + id))
+	return srv.DB.Del("books",id)
+}
+
+type AddPattern struct {
+	Pattern string
+	Open func(string) (Ebook, error)
+}
+
+func (srv *Server) AutoAdd(extension string, open func(string) (Ebook,error)) {
+	srv.addPatterns = append(srv.addPatterns,AddPattern{extension,open})
+}
+
+func (srv *Server) runAutoAdds() error {
+	filePath := srv.AutoAddPath
+	if filePath == "" {
+		return nil
+	}
 	safePath := filepath.FromSlash(filePath)
 	watch,err := fsnotify.NewWatcher()
     if err != nil {
@@ -122,64 +160,64 @@ func (srv *Server) AutoAdd(filePath string, open func(string) (Ebook,error)) err
         return err
     }
 
-    go func() {
-        for {
-            select {
-            case ev := <-watch.Event:
-                if ev.IsCreate() {
-                    fileName := ev.Name
-                    if fileName[len(fileName)-4:] == "epub" {
-                        go func(name string) {
-                            <-time.After(1 * time.Second)
-                            book,err := open(name)
-                            if err == nil {
-                                log.Printf("Adding %s",name)
-                                srv.AddBook(book)
-                                os.Remove(name)
-                            } else {
-                                log.Printf("Error: %s",err.Error())
-                            }
-                        }(fileName)
-                    }
-                }
-            }
-        }
-    }()
+	go func() {
+		for {
+			select {
+			case ev := <-watch.Event:
+				if ev.IsCreate() {
+					fileName := ev.Name
+					for _,v := range srv.addPatterns {
+						l := len(v.Pattern)
+						if fileName[len(fileName)-l:] == v.Pattern {
+							go func(name string,open func(string) (Ebook,error)) {
+								<-time.After(1 * time.Second)
+								book,err := open(name)
+								if err == nil {
+									log.Printf("Adding %s",name)
+									srv.AddBook(book)
+									os.Remove(name)
+								} else {
+									log.Printf("Error: %s",err.Error())
+								}
+							}(fileName,v.Open)
+						}
+					}
+				}
+			}
+		}
+	}()
 	return nil
 }
 
-func (srv *Server) GetFeed(name string,sortOverride string) (string, error) {
+func xmlMarshaler(i interface{},s1,s2 string) ([]byte,error) {
+	marshalled,err := xml.MarshalIndent(i,s1,s2)
+	if err != nil {
+		return marshalled,err
+	}
+	out := fmt.Sprintf("%s\n%s\n",xml.Header,marshalled)
+	return []byte(out),nil
+}
+
+func (srv *Server) GetFeed(name string,sortOverride string,marsh func(interface{},string,string) ([]byte,error)) (string, error) {
 	srv.Mut.Lock()
-	feed,err := srv.DB.GetFeed(name,sortOverride)
+	feed,err := srv.getFeedDB(name,sortOverride)
 	srv.Mut.Unlock()
 	if err != nil {
 		return "",err
 	}
-	out,err := xml.MarshalIndent(feed,"","  ")
+	out,err := marsh(feed,"","  ")
 	return string(out),err
 }
-
-func (srv *Server) GetBookFeed(id string) (string,error) {
-	srv.Mut.Lock()
-	feed,err := srv.DB.GetBookFeed(id)
-	srv.Mut.Unlock()
-	if err != nil {
-		return "",err
-	}
-	out,err := xml.MarshalIndent(feed,"","  ")
-	return string(out),err
-}
-
 
 func (srv *Server) serveFeed(feed,sortMeth string) func(w http.ResponseWriter,r *http.Request) {
 	return func(w http.ResponseWriter,r *http.Request) {
 		var err error
-		feed,err := srv.GetFeed(feed,sortMeth)
+		feed,err := srv.GetFeed(feed,sortMeth,xmlMarshaler)
 		if err != nil {
 			http.Error(w,err.Error(),500)
 			return
 		}
-        fmt.Fprintf(w,"%s\n%s\n",xml.Header,feed)
+        fmt.Fprintf(w,"%s\n",feed)
 	}
 }
 
@@ -212,37 +250,14 @@ func (srv *Server) handleSearch(w http.ResponseWriter,r *http.Request) {
 	srv.serveFeed("search:"+searchTerms,"")(w,r)
 }
 
-func (srv *Server) handleBook(w http.ResponseWriter,r *http.Request) {
-	id := r.FormValue("id")
-	log.Print("Serving book: "+id)
-	if id == "" {
-		srv.serveFeed("all","")(w,r)
-	} else {
-		srv.serveBook(id)(w,r)
-	}
-}
-
-func (srv *Server) serveBook(id string) func(http.ResponseWriter,*http.Request) {
-	return func(w http.ResponseWriter,r *http.Request) {
-		var err error
-		feed,err := srv.GetBookFeed(id)
-		if err != nil {
-			http.Error(w,err.Error(),500)
-			return
-		}
-        fmt.Fprintf(w,"%s\n%s\n",xml.Header,feed)
-	}
-
-}
-
-func (srv *Server) ServeHTTP() error {
+func (srv *Server) ServeHTTP(port int) error {
     http.HandleFunc("/",func(w http.ResponseWriter,r *http.Request) {
+		log.Printf("Got %s, redirecting...",r.URL.Path)
         http.Redirect(w,r,"/catalog",301)
     })
-
-	http.HandleFunc("/search",srv.handleSearch)
-	http.HandleFunc("/book",srv.handleBook)
-    http.Handle("/catalog/",http.StripPrefix("/catalog",http.HandlerFunc(srv.handleCatalog)))
+	handleFunc("/api/",srv.handleAPI)
+	handleFunc("/search",srv.handleSearch)
+    handleFunc("/catalog/",srv.handleCatalog)
     http.Handle("/get/",http.StripPrefix("/get/", http.FileServer(http.Dir(srv.Files))))
-    return http.ListenAndServe(":8080",nil)
+    return http.ListenAndServe(":"+fmt.Sprintf("%d",port),nil)
 }

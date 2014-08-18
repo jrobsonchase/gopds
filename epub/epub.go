@@ -1,6 +1,7 @@
 package epub
 
 import (
+	"errors"
 	"archive/zip"
 	"path/filepath"
 	"regexp"
@@ -29,6 +30,12 @@ func ReadEpub(path string) (gopds.Ebook, error) {
 
 func readEpub(path string) (*Epub, error) {
 	safePath := filepath.FromSlash(path)
+	deDrmPath := removeDRM(safePath)
+	if deDrmPath != "" {
+		safePath = deDrmPath
+	} else {
+		return nil,errors.New("Unable to remove drm")
+	}
 
 	book := &Epub{path: safePath, HasThumb: true, HasCover: true}
 	// Open a zip archive for reading.
@@ -147,4 +154,5 @@ func (book Epub) OpdsMeta() *gopds.OpdsMeta {
 
 func (book *Epub) Close() {
 	book.file.Close()
+	os.Remove(book.path)
 }

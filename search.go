@@ -33,7 +33,8 @@ func scoreEntry(search string, entry *OpdsEntry) {
 	}
 }
 
-func (db *OpdsDB) Search(searchStr string) ([]*OpdsEntry,error) {
+func (srv *Server) Search(searchStr string) ([]*OpdsEntry,error) {
+	db := srv.DB
 	booksBytes,err := db.GetAll("books")
 	if err != nil {
 		return nil,err

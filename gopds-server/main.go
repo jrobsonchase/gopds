@@ -11,17 +11,19 @@ import (
 func main() {
 	autoadd := flag.String("autoadd","","Directory to watch for epubs")
 	dataPath := flag.String("data",".gopds","Data directory")
+	port := flag.Int("port",8080,"Listen port")
 	flag.Parse()
 
-	srv,err := gopds.NewServer(*dataPath)
+	srv,err := gopds.NewServer(*dataPath,*autoadd)
 	if err != nil {
 		panic(err)
 	}
 
 	if *autoadd != "" {
-		srv.AutoAdd(*autoadd,epub.ReadEpub)
+		srv.AutoAdd("epub",epub.ReadEpub)
+		srv.AutoAdd("b64",epub.AddKey("keystorage"))
 	}
 
 
-	log.Fatal(srv.ServeHTTP())
+	log.Fatal(srv.ServeHTTP(*port))
 }

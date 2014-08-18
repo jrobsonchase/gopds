@@ -56,7 +56,6 @@ type OpdsEntry struct {
 	Id string `xml:"id,omitempty"`
 	*OpdsMeta
 	Updated  string       `xml:"updated,omitempty"`
-	Category string       `xml:"category,omitempty" json:",omitempty"`
 	Content  *OpdsContent `xml:"content,omitempty" json:",omitempty"`
 	Links    []*OpdsLink  `xml:"link,omitempty" json:",omitempty"`
 	Order	int	`xml:"-"`
@@ -70,6 +69,7 @@ type OpdsMeta struct {
 	Lang      string      `xml:"http://purl.org/dc/terms/ language,omitempty" json:",omitempty"`
 	Summary   string      `xml:"summary,omitempty" json:",omitempty"`
 	Rights    string      `xml:"rights,omitempty" json:",omitempty"`
+	Category string       `xml:"category,omitempty" json:",omitempty"`
 	Cover     bool        `xml:"-"`
 	Thumb     bool        `xml:"-"`
 	CoverType string      `xml:"-"`
