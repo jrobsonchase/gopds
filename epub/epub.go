@@ -1,14 +1,15 @@
 package epub
 
 import (
-	"errors"
 	"archive/zip"
-	"path/filepath"
-	"regexp"
 	"encoding/xml"
-	"github.com/Pursuit92/gopds"
+	"errors"
 	"io"
 	"os"
+	"path/filepath"
+	"regexp"
+
+	"github.com/Pursuit92/gopds"
 )
 
 var (
@@ -20,7 +21,7 @@ type Epub struct {
 	path string
 	file *zip.ReadCloser
 	*Package
-	HasCover, HasThumb bool
+	HasCover, HasThumb   bool
 	ThumbType, CoverType string
 }
 
@@ -44,59 +45,59 @@ func readEpub(path string) (*Epub, error) {
 	var err error
 	book.file, err = zip.OpenReader(safePath)
 	if err != nil {
-		return nil,err
+		return nil, err
 	}
 	err = book.readOPF()
 	if err != nil {
 		return nil, err
 	}
-	book.CoverType,book.HasCover = book.coverTest()
-	book.ThumbType,book.HasThumb = book.thumbTest()
+	book.CoverType, book.HasCover = book.coverTest()
+	book.ThumbType, book.HasThumb = book.thumbTest()
 	return book, nil
 }
 
-func (book Epub) coverTest() (string,bool) {
+func (book Epub) coverTest() (string, bool) {
 	for _, v := range book.file.File {
 		if coverExp.Match([]byte(v.Name)) {
-			_,err := v.Open()
+			_, err := v.Open()
 			if err == nil {
 				imgtype := ""
 				switch v.Name[len(v.Name)-4:] {
-				case ".jpg","jpeg":
+				case ".jpg", "jpeg":
 					imgtype = "image/jpeg"
 				case ".png":
 					imgtype = "image/png"
 				}
-				return imgtype,true
+				return imgtype, true
 			}
 		}
 	}
-	return "",false
+	return "", false
 }
 
-func (book Epub) thumbTest() (string,bool) {
+func (book Epub) thumbTest() (string, bool) {
 	for _, v := range book.file.File {
 		if thumbExp.Match([]byte(v.Name)) {
-			_,err := v.Open()
+			_, err := v.Open()
 			if err == nil {
 				imgtype := ""
 				switch v.Name[len(v.Name)-4:] {
-				case ".jpg",".jpeg":
+				case ".jpg", ".jpeg":
 					imgtype = "image/jpeg"
 				case ".png":
 					imgtype = "image/png"
 				}
-				return imgtype,true
+				return imgtype, true
 			}
 		}
 	}
-	return "",false
+	return "", false
 }
 
 func (book Epub) Thumb() io.ReadCloser {
 	for _, v := range book.file.File {
 		if thumbExp.Match([]byte(v.Name)) {
-			file,_ := v.Open()
+			file, _ := v.Open()
 			return file
 		}
 	}
@@ -106,7 +107,7 @@ func (book Epub) Thumb() io.ReadCloser {
 func (book Epub) Cover() io.ReadCloser {
 	for _, v := range book.file.File {
 		if coverExp.Match([]byte(v.Name)) {
-			file,_ := v.Open()
+			file, _ := v.Open()
 			return file
 		}
 	}
@@ -142,16 +143,16 @@ func (book *Epub) readOPF() error {
 func (book Epub) OpdsMeta() *gopds.OpdsMeta {
 	meta := book.Meta
 	return &gopds.OpdsMeta{Title: meta.Title,
-	Author:    &gopds.OpdsAuthor{Name: meta.Creator},
-	Publisher: meta.Publisher,
-	Issued:    meta.Date,
-	Lang:      meta.Language,
-	Summary:   meta.Description,
-	Rights:    meta.Rights,
-	Cover:     book.HasCover,
-	Thumb:     book.HasThumb,
-	CoverType: book.CoverType,
-	ThumbType: book.ThumbType}
+		Author:    &gopds.OpdsAuthor{Name: meta.Creator},
+		Publisher: meta.Publisher,
+		Issued:    meta.Date,
+		Lang:      meta.Language,
+		Summary:   meta.Description,
+		Rights:    meta.Rights,
+		Cover:     book.HasCover,
+		Thumb:     book.HasThumb,
+		CoverType: book.CoverType,
+		ThumbType: book.ThumbType}
 }
 
 func (book *Epub) Close() {
