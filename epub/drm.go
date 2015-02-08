@@ -11,8 +11,13 @@ import (
 
 var (
 	keyStore string = ""
-	ignoble string = "/usr/local/bin/ignobleepub.py"
+	ignoble  string = "/usr/local/bin/ignobleepub.py"
+	deDRM    bool   = false
 )
+
+func init() {
+	flag.BoolVar(&deDRM, "dedrm", false, "Toggle DRM Removal")
+}
 
 func removeDRM(path string) string {
 	log.Print("Removing drm...")
